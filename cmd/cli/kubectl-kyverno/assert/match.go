@@ -1,31 +1,29 @@
 package assert
 
 import (
-	"context"
 	"fmt"
-	reflectutils "github.com/kyverno/kyverno-json/pkg/utils/reflect"
 	"reflect"
 )
 
-func GetKind(value any) reflect.Kind {
+func getKind(value any) reflect.Kind {
 	if value == nil {
 		return reflect.Invalid
 	}
 	return reflect.TypeOf(value).Kind()
 }
 
-func Match(ctx context.Context, expected, actual any) (bool, error) {
+func match(expected, actual any) (bool, error) {
 	if expected != nil {
-		switch reflectutils.GetKind(expected) {
+		switch getKind(expected) {
 		case reflect.Slice:
-			if reflectutils.GetKind(actual) != reflect.Slice {
-				return false, fmt.Errorf("invalid actual value, must be a slice, found %s", reflectutils.GetKind(actual))
+			if getKind(actual) != reflect.Slice {
+				return false, fmt.Errorf("invalid actual value, must be a slice, found %s", getKind(actual))
 			}
 			if reflect.ValueOf(expected).Len() != reflect.ValueOf(actual).Len() {
 				return false, nil
 			}
 			for i := 0; i < reflect.ValueOf(expected).Len(); i++ {
-				if inner, err := Match(ctx, reflect.ValueOf(expected).Index(i).Interface(), reflect.ValueOf(actual).Index(i).Interface()); err != nil {
+				if inner, err := match(reflect.ValueOf(expected).Index(i).Interface(), reflect.ValueOf(actual).Index(i).Interface()); err != nil {
 					return false, err
 				} else if !inner {
 					return false, nil
@@ -33,8 +31,8 @@ func Match(ctx context.Context, expected, actual any) (bool, error) {
 			}
 			return true, nil
 		case reflect.Map:
-			if reflectutils.GetKind(actual) != reflect.Map {
-				return false, fmt.Errorf("invalid actual value, must be a map, found %s", reflectutils.GetKind(actual))
+			if getKind(actual) != reflect.Map {
+				return false, fmt.Errorf("invalid actual value, must be a map, found %s", getKind(actual))
 			}
 			iter := reflect.ValueOf(expected).MapRange()
 			for iter.Next() {
@@ -42,7 +40,7 @@ func Match(ctx context.Context, expected, actual any) (bool, error) {
 				if !actualValue.IsValid() {
 					return false, nil
 				}
-				if inner, err := Match(ctx, iter.Value().Interface(), actualValue.Interface()); err != nil {
+				if inner, err := match(iter.Value().Interface(), actualValue.Interface()); err != nil {
 					return false, err
 				} else if !inner {
 					return false, nil
@@ -51,10 +49,10 @@ func Match(ctx context.Context, expected, actual any) (bool, error) {
 			return true, nil
 		}
 	}
-	return reflectutils.MatchScalar(expected, actual)
+	return matchScalar(expected, actual)
 }
 
-func MatchScalar(expected, actual any) (bool, error) {
+func matchScalar(expected, actual any) (bool, error) {
 	if actual == nil && expected == nil {
 		return true, nil
 	} else if actual == nil && expected != nil {
@@ -74,6 +72,10 @@ func MatchScalar(expected, actual any) (bool, error) {
 	if !a.IsValid() && !e.IsValid() {
 		return true, nil
 	}
+	// named string types (e.g. rule types) compare with plain strings
+	if a.Kind() == reflect.String && e.Kind() == reflect.String {
+		return a.String() == e.String(), nil
+	}
 	if a.CanComplex() && e.CanComplex() {
 		return a.Complex() == e.Complex(), nil
 	}
@@ -86,15 +88,15 @@ func MatchScalar(expected, actual any) (bool, error) {
 	if a.CanUint() && e.CanUint() {
 		return a.Uint() == e.Uint(), nil
 	}
-	if a, ok := ToNumber(a); ok {
-		if e, ok := ToNumber(e); ok {
+	if a, ok := toNumber(a); ok {
+		if e, ok := toNumber(e); ok {
 			return a == e, nil
 		}
 	}
-	return false, fmt.Errorf("types are not comparable, %s - %s", GetKind(expected), GetKind(actual))
+	return false, fmt.Errorf("types are not comparable, %s - %s", getKind(expected), getKind(actual))
 }
 
-func ToNumber(value reflect.Value) (float64, bool) {
+func toNumber(value reflect.Value) (float64, bool) {
 	if value.CanFloat() {
 		return value.Float(), true
 	}

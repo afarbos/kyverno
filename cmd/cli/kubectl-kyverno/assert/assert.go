@@ -3,25 +3,33 @@ package assert
 import (
 	"context"
 	"fmt"
-	"github.com/jmespath-community/go-jmespath/pkg/binding"
-	jpbinding "github.com/jmespath-community/go-jmespath/pkg/binding"
-	"github.com/kyverno/kyverno-json/pkg/engine/match"
-	"github.com/kyverno/kyverno-json/pkg/engine/template"
-	reflectutils "github.com/kyverno/kyverno-json/pkg/utils/reflect"
-	"k8s.io/apimachinery/pkg/util/validation/field"
 	"reflect"
+
+	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-type Assertion interface {
-	assert(context.Context, *field.Path, any, binding.Bindings, ...template.Option) (field.ErrorList, error)
+// Bindings are the named values available to expressions through the `bindings` variable.
+type Bindings map[string]any
+
+func (b Bindings) register(name string, value any) Bindings {
+	out := make(Bindings, len(b)+1)
+	for k, v := range b {
+		out[k] = v
+	}
+	out[name] = value
+	return out
 }
 
-func Assert(ctx context.Context, path *field.Path, assertion Assertion, value any, bindings binding.Bindings, opts ...template.Option) (field.ErrorList, error) {
-	return assertion.assert(ctx, path, value, bindings, opts...)
+type Assertion interface {
+	assert(context.Context, *field.Path, any, Bindings) (field.ErrorList, error)
+}
+
+func Assert(ctx context.Context, path *field.Path, assertion Assertion, value any, bindings Bindings) (field.ErrorList, error) {
+	return assertion.assert(ctx, path, value, bindings)
 }
 
 func Parse(ctx context.Context, assertion any) Assertion {
-	switch reflectutils.GetKind(assertion) {
+	switch getKind(assertion) {
 	case reflect.Slice:
 		node := sliceNode{}
 		valueOf := reflect.ValueOf(assertion)
@@ -45,7 +53,7 @@ func Parse(ctx context.Context, assertion any) Assertion {
 // it is responsible for projecting the analysed resource and passing the result to the descendant
 type mapNode map[any]Assertion
 
-func (n mapNode) assert(ctx context.Context, path *field.Path, value any, bindings binding.Bindings, opts ...template.Option) (field.ErrorList, error) {
+func (n mapNode) assert(ctx context.Context, path *field.Path, value any, bindings Bindings) (field.ErrorList, error) {
 	var errs field.ErrorList
 	// if we assert against an empty object, value is expected to be not nil
 	if len(n) == 0 {
@@ -55,25 +63,25 @@ func (n mapNode) assert(ctx context.Context, path *field.Path, value any, bindin
 		return errs, nil
 	}
 	for k, v := range n {
-		projection, err := project(ctx, k, value, bindings, opts...)
+		projection, err := project(ctx, k, value, bindings)
 		if err != nil {
 			return nil, field.InternalError(path.Child(fmt.Sprint(k)), err)
 		} else if projection == nil {
 			errs = append(errs, field.Required(path.Child(fmt.Sprint(k)), "field not found in the input object"))
 		} else {
 			if projection.binding != "" {
-				bindings = bindings.Register("$"+projection.binding, jpbinding.NewBinding(projection.result))
+				bindings = bindings.register(projection.binding, projection.result)
 			}
 			if projection.foreach {
-				projectedKind := reflectutils.GetKind(projection.result)
+				projectedKind := getKind(projection.result)
 				if projectedKind == reflect.Slice {
 					valueOf := reflect.ValueOf(projection.result)
 					for i := 0; i < valueOf.Len(); i++ {
 						bindings := bindings
 						if projection.foreachName != "" {
-							bindings = bindings.Register("$"+projection.foreachName, jpbinding.NewBinding(i))
+							bindings = bindings.register(projection.foreachName, i)
 						}
-						if _errs, err := v.assert(ctx, path.Child(fmt.Sprint(k)).Index(i), valueOf.Index(i).Interface(), bindings, opts...); err != nil {
+						if _errs, err := v.assert(ctx, path.Child(fmt.Sprint(k)).Index(i), valueOf.Index(i).Interface(), bindings); err != nil {
 							return nil, err
 						} else {
 							errs = append(errs, _errs...)
@@ -85,9 +93,9 @@ func (n mapNode) assert(ctx context.Context, path *field.Path, value any, bindin
 						key := iter.Key().Interface()
 						bindings := bindings
 						if projection.foreachName != "" {
-							bindings = bindings.Register("$"+projection.foreachName, jpbinding.NewBinding(key))
+							bindings = bindings.register(projection.foreachName, key)
 						}
-						if _errs, err := v.assert(ctx, path.Child(fmt.Sprint(k)).Key(fmt.Sprint(key)), iter.Value().Interface(), bindings, opts...); err != nil {
+						if _errs, err := v.assert(ctx, path.Child(fmt.Sprint(k)).Key(fmt.Sprint(key)), iter.Value().Interface(), bindings); err != nil {
 							return nil, err
 						} else {
 							errs = append(errs, _errs...)
@@ -97,7 +105,7 @@ func (n mapNode) assert(ctx context.Context, path *field.Path, value any, bindin
 					return nil, field.TypeInvalid(path.Child(fmt.Sprint(k)), projection.result, "expected a slice or a map")
 				}
 			} else {
-				if _errs, err := v.assert(ctx, path.Child(fmt.Sprint(k)), projection.result, bindings, opts...); err != nil {
+				if _errs, err := v.assert(ctx, path.Child(fmt.Sprint(k)), projection.result, bindings); err != nil {
 					return nil, err
 				} else {
 					errs = append(errs, _errs...)
@@ -113,11 +121,11 @@ func (n mapNode) assert(ctx context.Context, path *field.Path, value any, bindin
 // if lengths match all descendants are evaluated with their corresponding items.
 type sliceNode []Assertion
 
-func (n sliceNode) assert(ctx context.Context, path *field.Path, value any, bindings binding.Bindings, opts ...template.Option) (field.ErrorList, error) {
+func (n sliceNode) assert(ctx context.Context, path *field.Path, value any, bindings Bindings) (field.ErrorList, error) {
 	var errs field.ErrorList
 	if value == nil {
 		errs = append(errs, field.Invalid(path, value, "value is null"))
-	} else if reflectutils.GetKind(value) != reflect.Slice {
+	} else if getKind(value) != reflect.Slice {
 		return nil, field.TypeInvalid(path, value, "expected a slice")
 	} else {
 		valueOf := reflect.ValueOf(value)
@@ -125,7 +133,7 @@ func (n sliceNode) assert(ctx context.Context, path *field.Path, value any, bind
 			errs = append(errs, field.Invalid(path, value, "lengths of slices don't match"))
 		} else {
 			for i := range n {
-				if _errs, err := n[i].assert(ctx, path.Index(i), valueOf.Index(i).Interface(), bindings, opts...); err != nil {
+				if _errs, err := n[i].assert(ctx, path.Index(i), valueOf.Index(i).Interface(), bindings); err != nil {
 					return nil, err
 				} else {
 					errs = append(errs, _errs...)
@@ -143,26 +151,24 @@ type scalarNode struct {
 	rhs any
 }
 
-func (n *scalarNode) assert(ctx context.Context, path *field.Path, value any, bindings binding.Bindings, opts ...template.Option) (field.ErrorList, error) {
+func (n *scalarNode) assert(ctx context.Context, path *field.Path, value any, bindings Bindings) (field.ErrorList, error) {
 	rhs := n.rhs
 	expression := parseExpression(ctx, rhs)
-	// we only project if the expression uses the engine syntax
-	// this is to avoid the case where the value is a map and the RHS is a string
-	if expression != nil && expression.engine != "" {
+	if expression != nil && expression.expression {
 		if expression.foreachName != "" {
 			return nil, field.Invalid(path, rhs, "foreach is not supported on the RHS")
 		}
 		if expression.binding != "" {
 			return nil, field.Invalid(path, rhs, "binding is not supported on the RHS")
 		}
-		projected, err := template.Execute(ctx, expression.statement, value, bindings, opts...)
+		projected, err := execute(expression.statement, value, bindings)
 		if err != nil {
 			return nil, field.InternalError(path, err)
 		}
 		rhs = projected
 	}
 	var errs field.ErrorList
-	if match, err := match.Match(ctx, rhs, value); err != nil {
+	if match, err := match(rhs, value); err != nil {
 		return nil, field.InternalError(path, err)
 	} else if !match {
 		errs = append(errs, field.Invalid(path, value, expectValueMessage(rhs)))
@@ -182,9 +188,6 @@ func expectValueMessage(value any) string {
 		return fmt.Sprintf("Expected value: %s", t.String())
 	default:
 		// fallback to raw struct
-		// TODO: internal types have panic guards against json.Marshalling to prevent
-		// accidental use of internal types in external serialized form.  For now, use
-		// %#v, although it would be better to show a more expressive output in the future
 		return fmt.Sprintf("Expected value: %#v", value)
 	}
 }

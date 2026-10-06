@@ -2,16 +2,15 @@ package assert
 
 import (
 	"context"
-	reflectutils "github.com/kyverno/kyverno-json/pkg/utils/reflect"
 	"reflect"
 	"regexp"
 )
 
 var (
-	foreachRegex = regexp.MustCompile(`^~(\w+)?\.(.*)`)
-	bindingRegex = regexp.MustCompile(`(.*)\s*->\s*(\w+)$`)
-	escapeRegex  = regexp.MustCompile(`^\\(.+)\\$`)
-	engineRegex  = regexp.MustCompile(`^\((?:(\w+):)?(.+)\)$`)
+	foreachRegex    = regexp.MustCompile(`^~(\w+)?\.(.*)`)
+	bindingRegex    = regexp.MustCompile(`(.*?)\s*->\s*(\w+)$`)
+	escapeRegex     = regexp.MustCompile(`^\\(.+)\\$`)
+	expressionRegex = regexp.MustCompile(`^\((.+)\)$`)
 )
 
 type expression struct {
@@ -19,7 +18,7 @@ type expression struct {
 	foreachName string
 	statement   string
 	binding     string
-	engine      string
+	expression  bool
 }
 
 func parseExpressionRegex(_ context.Context, in string) *expression {
@@ -35,18 +34,12 @@ func parseExpressionRegex(_ context.Context, in string) *expression {
 		expression.binding = match[2]
 		in = match[1]
 	}
-	// 3. match escape, if there's no escaping then match engine
+	// 3. match escape, if there's no escaping then match expression
 	if match := escapeRegex.FindStringSubmatch(in); match != nil {
 		in = match[1]
-	} else {
-		if match := engineRegex.FindStringSubmatch(in); match != nil {
-			expression.engine = match[1]
-			// account for default engine
-			if expression.engine == "" {
-				expression.engine = "jp"
-			}
-			in = match[2]
-		}
+	} else if match := expressionRegex.FindStringSubmatch(in); match != nil {
+		expression.expression = true
+		in = match[1]
 	}
 	// parse statement
 	expression.statement = in
@@ -57,7 +50,7 @@ func parseExpressionRegex(_ context.Context, in string) *expression {
 }
 
 func parseExpression(ctx context.Context, value any) *expression {
-	if reflectutils.GetKind(value) != reflect.String {
+	if getKind(value) != reflect.String {
 		return nil
 	}
 	return parseExpressionRegex(ctx, reflect.ValueOf(value).String())
