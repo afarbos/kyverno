@@ -3,6 +3,9 @@ package assert
 import (
 	"context"
 	"errors"
+	"github.com/jmespath-community/go-jmespath/pkg/binding"
+	"github.com/kyverno/kyverno-json/pkg/engine/template"
+	reflectutils "github.com/kyverno/kyverno-json/pkg/utils/reflect"
 	"reflect"
 )
 
@@ -13,11 +16,11 @@ type projection struct {
 	result      any
 }
 
-func project(ctx context.Context, key any, value any, bindings Bindings) (*projection, error) {
+func project(ctx context.Context, key any, value any, bindings binding.Bindings, opts ...template.Option) (*projection, error) {
 	expression := parseExpression(ctx, key)
 	if expression != nil {
-		if expression.expression {
-			projected, err := execute(expression.statement, value, bindings)
+		if expression.engine != "" {
+			projected, err := template.Execute(ctx, expression.statement, value, bindings, opts...)
 			if err != nil {
 				return nil, err
 			}
@@ -30,7 +33,7 @@ func project(ctx context.Context, key any, value any, bindings Bindings) (*proje
 		} else {
 			if value == nil {
 				return nil, nil
-			} else if getKind(value) == reflect.Map {
+			} else if reflectutils.GetKind(value) == reflect.Map {
 				mapValue := reflect.ValueOf(value).MapIndex(reflect.ValueOf(expression.statement))
 				if !mapValue.IsValid() {
 					return nil, nil
@@ -44,7 +47,7 @@ func project(ctx context.Context, key any, value any, bindings Bindings) (*proje
 			}
 		}
 	}
-	if getKind(value) == reflect.Map {
+	if reflectutils.GetKind(value) == reflect.Map {
 		mapValue := reflect.ValueOf(value).MapIndex(reflect.ValueOf(key))
 		if !mapValue.IsValid() {
 			return nil, nil

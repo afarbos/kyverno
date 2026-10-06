@@ -10,7 +10,7 @@ import (
 
 	"github.com/go-git/go-billy/v5"
 	"github.com/kyverno/kyverno/cmd/cli/kubectl-kyverno/apis/v1alpha1"
-	"github.com/kyverno/kyverno/cmd/cli/kubectl-kyverno/assert"
+	"github.com/kyverno/kyverno-json/pkg/engine/assert"
 	"github.com/kyverno/kyverno/cmd/cli/kubectl-kyverno/output/color"
 	"github.com/kyverno/kyverno/cmd/cli/kubectl-kyverno/output/table"
 	engineapi "github.com/kyverno/kyverno/pkg/engine/api"
